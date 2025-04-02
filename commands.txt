@@ -1,0 +1,18 @@
+commands to run:
+
+
+mount -T io-pkt -o nvram=/etc/hotspot/nvram.txt,fw=/etc/hotspot/firmware.bin,clm_blob=/etc/hotspot/firmware.clm_blob,sdio_baseaddr=0xfe300000,sdio_irq=158,sdio_verbose=1,drv_supp=3,key_delay=5 /lib/dll/devnp-qwdi-2.9_bcm4339-rpi4.so
+
+
+
+wpa_supplicant -Dqwdi -t -Z100 -ibcm0 -c /etc/wpa_supplicant.conf &
+
+
+
+
+dhclient -m -lf /dev/shmem/dhclient_wifi.leases -pf /dev/shmem/dhclient_wifi.pid -nw bcm0
+
+
+
+
+hostapd /etc/hostapd.conf &
