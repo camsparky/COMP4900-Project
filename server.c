@@ -5,6 +5,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include "ballot.h"
 #define SERVER_PORT 6000
 
 int main() {
@@ -13,6 +14,10 @@ int main() {
     int status, addrSize, bytesRcv;
     char buffer[30];
     char *response = "OK";
+    int batchSize = 50;
+	struct Ballot ballots[batchSize];
+	int lib = 0;
+	int con = 0;
 
     //Create the server socket
     serverSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -20,6 +25,9 @@ int main() {
     	printf("*** SERVER ERROR: Could not open socket.\n");
     	exit(-1);
     }
+
+	printf("*** Peepeee \n");
+
 
     //Setup the server address
     memset(&serverAddress, 0, sizeof(serverAddress)); //Zeros the struct
@@ -54,10 +62,21 @@ int main() {
     	//Go into infinite loop to talk to client
     	while(1){
     		// Get the message from the client
-    		bytesRcv = recv(clientSocket, buffer, sizeof(buffer), 0);
-    		buffer[bytesRcv] = 0;
-    		printf("SERVER: Received client request: %s\n",buffer);
 
+    		bytesRcv = recv(clientSocket, (char*)&ballots, 50*sizeof(ballots), 0);
+    		buffer[bytesRcv] = 0;
+    		printf("SERVER: Received client request: %d\n",ballots[0].voterId);
+
+    		//Figure out data storage here
+    		for(int i = 0; i<batchSize; i++){
+				if(ballots[i].candidate == 0){
+					lib++;
+				}else if(ballots[i].candidate == 1){
+					con++;
+				}
+			}
+
+    		printf("Current rankings: Liberals: %d, Conservatives: %d \n", lib, con);
     		// Respond with an "OK" Message
     		printf("SERVER: Sending \"%s\" to client\n", response);
     		send(clientSocket, response, strlen(response),0);
