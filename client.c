@@ -19,10 +19,7 @@
 #define PRIORITY0 4
 #define PRIORITY1 3
 #define BATCH_SIZE 50
-#define AREA_CODE "OT"
 #define BLOCK_SIZE 16
-#define KEY { 0x42, 0x49, 0x47, 0x20, 0x43, 0x48, 0x55, 0x4E, 0x47, 0x55, 0x53, 0x4D, 0x45, 0x4D, 0x45, 0x0f }
-#define IV {0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x06 }
 
 void writeAudit(struct LinkedList *list){
 	FILE *fptr;
@@ -55,7 +52,7 @@ void insertatend(struct LinkedList *list, struct Ballot *voteData){
 	list->total += 1;
 }
 
-char* getNewId(unsigned int curId){
+char* getNewId(unsigned int curId, char A1, char A2){
 	char* newId = (char*) malloc(11 * sizeof(char));
 	int length = (int)((floor(log10(curId))+1)*sizeof(char));
 	sprintf(newId+((10*sizeof(char)) - (length*sizeof(char))), "%d", curId);
@@ -64,8 +61,8 @@ char* getNewId(unsigned int curId){
 	for(i=(10-(length+1)); i>1; i--){
 		newId[i] = '0';
 	}
-	newId[0] = AREA_CODE[0];
-	newId[1] = AREA_CODE[1];
+	newId[0] = A1;
+	newId[1] = A2;
 	newId[10] = 0;
 	return newId;
 }
@@ -90,18 +87,19 @@ void* printVotes(void *args){
 		printf("Party 2 Count: %d\n", totalVotesParty2);
 		printf("-------------------------\n");
 		fflush(stdout);
-		sleep(10);
+		sleep(5);
 	}
 }
 
 void* votingMachine(void *args){
 	struct LinkedList *masterList = (struct LinkedList*) args;
 	unsigned int curVoteId = 1;
+	char voteCode[2] = {generate_random(65,90), generate_random(65,90)};
 	while(1){
 		int curTotal=0;
 		while(curTotal < BATCH_SIZE){
 			char vote = generate_random(0,1);
-			char* newId = getNewId(curVoteId);
+			char* newId = getNewId(curVoteId, voteCode[0], voteCode[1]);
 			struct Ballot *newBallot = (struct Ballot*) malloc(sizeof(struct Ballot));
 			memcpy(newBallot->voterId, newId, sizeof(newBallot->voterId));
 			newBallot->candidate = vote;
@@ -110,7 +108,7 @@ void* votingMachine(void *args){
 			curTotal+=1;
 		}
 		writeAudit(masterList);
-		sleep(10);
+		sleep(5);
 	}
 }
 
@@ -122,8 +120,8 @@ uint8_t* encryptData(struct Ballot *balInfo){
 	qcrypto_key_t *qkey = NULL;
 
 	//Setting up key and IV
-	const uint8_t key[] = KEY;
-	uint8_t ivVal[] = IV;
+	const uint8_t key[] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f};
+	const uint8_t ivVal[] = {0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x06 };
 	const size_t keysize = sizeof(key);
 
 	//Setting up plaintext to encrypt (Our data)
@@ -196,85 +194,6 @@ uint8_t* encryptData(struct Ballot *balInfo){
 	return ctext_ptr;
 }
 
-struct Ballot* decryptData(uint8_t* ctext_ptr){
-	//Setup Symmetric Cryptography
-	int ret;
-	qcrypto_ctx_t *qctx = NULL;
-	qcrypto_ctx_t *qkeyctx = NULL;
-	qcrypto_key_t *qkey = NULL;
-
-	//Setting key and IV values
-	const uint8_t key[] = KEY;
-	uint8_t ivVal[] = IV;
-	const size_t keysize = sizeof(key);
-
-	//Setting decrypt plaintext pointer
-	uint8_t ptext_cmp[BLOCK_SIZE];
-	uint8_t *ptext_ptr = ptext_cmp;
-	size_t psize_cmp = 0;
-
-	/* Initialize the Qcrypto Library */
-	ret = qcrypto_init(QCRYPTO_INIT_LAZY, NULL);
-	if (ret != QCRYPTO_R_EOK) {
-		fprintf(stderr, "qcryto_init() failed (%d:%s)\n", ret, qcrypto_strerror(ret));
-		exit(-1);
-	}
-
-	/* Request symmetric keygen */
-	ret = qcrypto_keygen_request("symmetric", NULL, 0, &qkeyctx);
-	if (ret != QCRYPTO_R_EOK) {
-	   fprintf(stderr, "qcrypto_keygen_request() failed (%d:%s)\n", ret, qcrypto_strerror(ret));
-	   exit(-1);
-	}
-
-	/* Initialize cipher arguments */
-	qcrypto_cipher_args_t cargs = {
-		.action = QCRYPTO_CIPHER_DECRYPT,
-		.iv = ivVal,
-		.ivsize = 16,
-		.padding = QCRYPTO_CIPHER_PADDING_PKCS7
-	};
-
-	/* Request aes-128-cbc */
-	ret = qcrypto_cipher_request("aes-128-cbc", NULL, 0, &qctx);
-	if (ret != QCRYPTO_R_EOK) {
-		fprintf(stderr, "qcrypto_cipher_request() failed (%d:%s)\n", ret, qcrypto_strerror(ret));
-		exit(-1);
-	}
-
-	/* Load key */
-	ret = qcrypto_key_from_mem(qkeyctx, &qkey, key, keysize);
-	if (ret != QCRYPTO_R_EOK) {
-		fprintf(stderr, "qcrypto_key_from_mem() failed (%d:%s)\n", ret, qcrypto_strerror(ret));
-		exit(-1);
-	}
-
-	/* Initialize cipher decryption */
-	ret = qcrypto_cipher_init(qctx, qkey, &cargs);
-	if (ret != QCRYPTO_R_EOK) {
-		fprintf(stderr, "qcrypto_cipher_init() failed (%d:%s)\n", ret, qcrypto_strerror(ret));
-		exit(-1);
-	}
-
-	/* Cipher decryption */
-	ret = qcrypto_cipher_decrypt(qctx, ctext_ptr, BLOCK_SIZE, ptext_ptr, &psize_cmp);
-	if (ret != QCRYPTO_R_EOK) {
-		fprintf(stderr, "qcrypto_cipher_decrypt() failed (%d:%s)\n", ret, qcrypto_strerror(ret));
-		exit(-1);
-	}
-
-	/* Finalize cipher decryption */
-	ret = qcrypto_cipher_final(qctx, ptext_ptr, &psize_cmp);
-	if (ret != QCRYPTO_R_EOK) {
-		fprintf(stderr, "qcrypto_cipher_final() failed (%d:%s)\n", ret, qcrypto_strerror(ret));
-		exit(-1);
-	}
-
-	struct Ballot *newBallot = (struct Ballot*) malloc(sizeof(struct Ballot));
-	memcpy(newBallot, ptext_cmp, sizeof(struct Ballot));
-	return newBallot;
-}
-
 
 int main(int argc, char **argv)
 {
@@ -286,7 +205,7 @@ int main(int argc, char **argv)
 	int clientSocket;
 	struct sockaddr_in serverAddress;
 	char buffer[80];
-	int status, bytesRcv;
+	int status;
 
 	//Thread Related Variables
 	pthread_t threads[NUMTHREADS];
@@ -332,13 +251,6 @@ int main(int argc, char **argv)
     	curData = list->head;
     }
 
-    //Create the client socket
-    clientSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if(clientSocket<0){
-    	printf("*** CLIENT ERROR: Could not open socket");
-    	exit(-1);
-    }
-
     //Setup Address
     memset(&serverAddress, 0, sizeof(serverAddress));
     serverAddress.sin_family = AF_INET;
@@ -346,24 +258,34 @@ int main(int argc, char **argv)
     serverAddress.sin_port = htons((unsigned short) serverPort);
 
     while(1){
-    	if((list->total - curSentIndex)>0 && (list->total - curSentIndex)%BATCH_SIZE==0){
-		//Connect to server
+    	if((list->total - curSentIndex)>=50){
+    		//Create the client socket
+			clientSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+			if(clientSocket<0){
+				printf("*** CLIENT ERROR: Could not open socket");
+				exit(-1);
+			}
+			//Connect to server
 			status = connect(clientSocket, (struct sockaddr *)&serverAddress, sizeof(serverAddress));
 			if(status < 0){
 				printf("*** CLIENT ERROR: Could not connect.\n");
 				exit(-1);
 			}
+			if(curSentIndex>0){curData = curData->next;}
 			for(int i=0; i<BATCH_SIZE; i++){
-				uint8_t* cipher = encryptData(curData->ballot);
-				ssize_t bytesSent = send(clientSocket, cipher, BLOCK_SIZE, 0);
-				exit(0);
-				bytesRcv = recv(clientSocket, buffer, 80, 0);
-				curData = curData->next;
+				uint8_t* cipherPointer = encryptData(curData->ballot);
+				uint8_t cipherBlock[BLOCK_SIZE];
+				memcpy(cipherBlock,cipherPointer,BLOCK_SIZE);
+				send(clientSocket, cipherBlock, BLOCK_SIZE, 0);
+				recv(clientSocket, buffer, 80, 0);
+				if(curData->next){
+					curData = curData->next;
+				}
 			}
 			curSentIndex+=50;
 			close(clientSocket);
     	}
-    	sleep(10);
+    	sleep(5);
     }
 
     return EXIT_SUCCESS;

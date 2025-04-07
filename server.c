@@ -15,9 +15,11 @@
 #include <qcrypto/qcrypto_keys.h>
 #include "ballot.h"
 #define SERVER_PORT 6000
+#define NUMTHREADS 2
+#define PRIORITY0 4
+#define PRIORITY1 3
 #define BLOCK_SIZE 16
-#define KEY { 0x42, 0x49, 0x47, 0x20, 0x43, 0x48, 0x55, 0x4E, 0x47, 0x55, 0x53, 0x4D, 0x45, 0x4D, 0x45, 0x0f}
-#define IV {0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x06}
+#define BATCH_SIZE 50
 
 struct Ballot* decryptData(uint8_t* ctext_ptr){
 	//Setup Symmetric Cryptography
@@ -27,8 +29,8 @@ struct Ballot* decryptData(uint8_t* ctext_ptr){
 	qcrypto_key_t *qkey = NULL;
 
 	//Setting key and IV values
-	const uint8_t key[] = KEY;
-	uint8_t ivVal[] = IV;
+	const uint8_t key[] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f};
+	const uint8_t ivVal[] = {0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x06};
 	const size_t keysize = sizeof(key);
 
 	//Setting decrypt plaintext pointer
@@ -98,13 +100,70 @@ struct Ballot* decryptData(uint8_t* ctext_ptr){
 	return newBallot;
 }
 
+void* writeAudit(void *args){
+	struct LinkedList *list = (struct LinkedList*) args;
+	while(1){
+		FILE *fptr;
+		fptr = fopen("auditServer.txt", "w");
+		struct node *node = list->head;
+		while(node->ballot){
+			fprintf(fptr,"%s,%d\n", node->ballot->voterId, node->ballot->candidate);
+			node = node->next;
+		}
+		fclose(fptr);
+		sleep(5);
+	}
+}
+
+void* printVotes(void *args){
+	struct LinkedList *masterList = (struct LinkedList*) args;
+	while(1){
+		struct node *curNode = masterList->head;
+		unsigned int totalVotesParty1 = 0;
+		unsigned int totalVotesParty2 = 0;
+		while(curNode->ballot){
+			if(curNode->ballot->candidate==0){
+				totalVotesParty1+=1;
+			}
+			else{
+				totalVotesParty2+=1;
+			}
+			curNode = curNode->next;
+		}
+		printf("-----CURRENT RESULTS-----\n");
+		printf("Party 1 Count: %d\n", totalVotesParty1);
+		printf("Party 2 Count: %d\n", totalVotesParty2);
+		printf("-------------------------\n");
+		fflush(stdout);
+		sleep(5);
+	}
+}
+
 int main() {
+	//Server Information related variables
     int serverSocket, clientSocket;
 	struct sockaddr_in serverAddress, clientAddr;
-    int status, addrSize, bytesRcv;
-    char buffer[30];
+    int status, addrSize;
     char *response = "OK";
+
+    //Cryptography related variables
 	uint8_t ctext_cmp[BLOCK_SIZE];
+	uint8_t *ctext_pointer = ctext_cmp;
+
+	//Thread Related Variables
+	pthread_t threads[NUMTHREADS];
+    pthread_attr_t attribs[NUMTHREADS];
+    struct sched_param params[NUMTHREADS];
+    params[0].sched_priority = PRIORITY0;
+    params[1].sched_priority = PRIORITY1;
+
+	//Data Structure holding voter data
+	struct LinkedList *list = (struct LikedList*) malloc(sizeof(struct LinkedList));
+	struct node *headNode = (struct node*) malloc(sizeof(struct node));
+	list->head = headNode;
+	list->tail = headNode;
+	struct node *curNode = list->head;
+	list->total=0;
 
     //Create the server socket
     serverSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -121,7 +180,6 @@ int main() {
 
     // Bind the server socket
     status = bind(serverSocket, (struct sockaddr *) &serverAddress, sizeof(serverAddress));
-
     if(status < 0){
     	printf("*** SERVER ERROR: Could not bind socket.\n");
     	exit(-1);
@@ -134,6 +192,21 @@ int main() {
     	exit(-1);
     }
 
+    //Initializing Thread Attributes
+    int i = 0;
+    for (i = 0; i < NUMTHREADS; i++){ //Setting scheduling policy to be Round-robin for each thread
+            pthread_attr_init(&attribs[i]);
+            pthread_attr_setdetachstate(&attribs[i],PTHREAD_CREATE_DETACHED); // Don't need to wait on the thread returning because it should run forever until votes stop
+            pthread_attr_setinheritsched(&attribs[i], PTHREAD_EXPLICIT_SCHED);
+            pthread_attr_setschedpolicy(&attribs[i], SCHED_RR); //Using round robin scheduling
+    }
+
+    //Creating threads
+    pthread_attr_setschedparam(&attribs[0], &params[0]);
+    pthread_attr_setschedparam(&attribs[1], &params[1]);
+    pthread_create(&threads[0], &attribs[0], printVotes, (void *)list); //Voting Machine Thread
+    pthread_create(&threads[1], &attribs[1], writeAudit, (void *)list); //Printing Votes Thread
+
     while(1){
     	addrSize = sizeof(clientAddr);
     	clientSocket = accept(serverSocket, (struct sockaddr *) &clientAddr, &addrSize);
@@ -144,13 +217,16 @@ int main() {
     	printf("SERVER: Received client connection.\n");
 
 		// Get the message from the client
-		bytesRcv = recv(clientSocket, (uint8_t*)ctext_cmp, BLOCK_SIZE, 0);
-		struct Ballot *test = decryptData(ctext_cmp);
-		printf("%s",test->voterId);
-		exit(0);
-
-		printf("SERVER: Sending \"%s\" to client\n", response);
-		send(clientSocket, response, strlen(response),0);
+    	for(int i=0; i<BATCH_SIZE; i++){
+    		recv(clientSocket, (uint8_t*)ctext_pointer, BLOCK_SIZE, 0);
+    		struct Ballot *plainData = decryptData(ctext_cmp);
+    		send(clientSocket, response, strlen(response),0);
+    		struct node *newNode = (struct node*) malloc(sizeof(struct node));
+			curNode->ballot = plainData;
+			curNode->next = newNode;
+			curNode = curNode->next;
+			list->total+=1;
+    	}
 
     	close(clientSocket);
     }
